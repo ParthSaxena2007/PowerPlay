@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trading desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+<style>
+  .market td { white-space: nowrap; }
+  .market td:first-child { white-space: normal; min-width: 150px; }
+  .market .tags { display: flex; flex-wrap: wrap; gap: .2rem; margin-top: .2rem; }
+  .market .tag { margin-left: 0; white-space: nowrap; }
+  .market .qty { width: 68px; }
+  .market td:first-child { min-width: 120px; }
+  .grid-main { grid-template-columns: minmax(0, 300px) minmax(0, 1fr); }
+  .trade { display: flex; gap: .3rem; align-items: center; }
+  .trade button { min-height: 36px; padding: .3rem .6rem; }
+  .gen-row { display: grid; grid-template-columns: 1fr 90px 110px; gap: .6rem; align-items: center; padding: .35rem 0; border-bottom: 1px solid var(--line); }
+  .gen-row:last-child { border-bottom: 0; }
+  .figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: .6rem; margin-top: .8rem; }
+  .figures div { background: var(--sunken); border-radius: var(--radius-s); padding: .5rem .6rem; }
+  .figures b { display: block; font-family: var(--display); font-size: 1.35rem; font-variant-numeric: tabular-nums; }
+  .figures small { font-size: .8rem; }
+  .flash-item { border-left: 3px solid var(--danger); padding-left: .6rem; margin-bottom: .5rem; font-weight: 600; }
+  .lb-me { background: color-mix(in srgb, var(--signal) 18%, transparent); }
+  .idle { text-align: center; padding: 3rem 1rem; }
+  .idle h2 { font-size: 2.2rem; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap">
+    <div class="brand" id="brand">Power Play</div>
+    <div class="stat"><small>Team</small><b id="tName">…</b></div>
+    <div class="stat"><small id="roundLabel">Round</small><b id="roundTitle">–</b></div>
+    <div class="spacer"></div>
+    <div class="stat"><small>Cash</small><b id="tCash">–</b></div>
+    <div class="stat"><small>Power points</small><b id="tPts">–</b></div>
+    <div class="stat"><small id="clockLabel">Time left</small><span class="clock" id="clock">–:––</span></div>
+    <button class="ghost" id="logout" style="color:inherit;border-color:currentColor">Log out</button>
+  </div>
+</header>
+
+<div class="wrap stack">
+  <div id="banners" class="stack" aria-live="assertive"></div>
+
+  <section id="idle" class="panel idle hidden"></section>
+
+  <div id="live" class="grid-main hidden">
+    <aside class="stack">
+      <section class="panel">
+        <h2>Market news</h2>
+        <div id="flashList"></div>
+        <ul class="news" id="news"></ul>
+      </section>
+      <section class="panel" id="lbPanel">
+        <h2>Leaderboard</h2>
+        <div id="lb"></div>
+      </section>
+    </aside>
+
+    <div class="stack">
+      <section class="panel hidden" id="resultPanel"></section>
+
+      <section class="panel">
+        <div class="row spread"><h2>Market</h2><small id="marketNote"></small></div>
+        <div class="scroll-x">
+          <table class="market">
+            <thead><tr>
+              <th>Resource</th><th class="r">Last round</th><th class="r">Price now</th><th class="r">Carbon tax</th>
+              <th class="r">In market</th><th class="r">You can buy</th><th class="r">You hold</th><th>Trade</th>
+            </tr></thead>
+            <tbody id="marketBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel" id="genPanel">
+        <div class="row spread"><h2>Generation plan</h2><small id="planState"></small></div>
+        <p class="muted">Choose how many units from your holdings to burn for power this round. It locks when the timer ends.</p>
+        <div id="genRows"></div>
+        <div class="meter" id="meter" style="margin-top:1rem" aria-hidden="true"></div>
+        <div class="figures" id="figures"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Your rounds</h2>
+        <div class="scroll-x"><table><thead><tr><th>Round</th><th class="r">Delivered</th><th class="r">Green</th><th class="r">Points</th><th class="r">Grid paid</th><th class="r">Tax</th><th class="r">Cash after</th></tr></thead><tbody id="hist"></tbody></table></div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/common.js"></script>
+<script>
+const { $, api, toast, esc, fmt, fmt1 } = PP;
+const token = localStorage.getItem('pp_token');
+if (!token) location.href = '/';
+
+let pub = null, me = null;
+let draft = {};            // generation plan being edited
+let draftRound = null;
+let warned = false;
+let lastStatus = null;
+
+$('#logout').onclick = () => { localStorage.removeItem('pp_token'); location.href = '/'; };
+
+const socket = io({ auth: { token } });
+socket.on('auth-failed', () => { localStorage.removeItem('pp_token'); location.href = '/'; });
+socket.on('public', (p) => { PP.syncClock(p.serverNow); pub = p; render(); });
+socket.on('team', (t) => { me = t; render(); });
+socket.on('flash', ({ text }) => { PP.beep(); toast('Flash news: ' + text); });
+socket.on('disconnect', () => banner('Connection lost. Reconnecting…', 'warn', 'conn'));
+socket.on('connect', () => clearBanner('conn'));
+
+// ---------- banners
+const banners = {};
+function banner(text, kind, key) { banners[key] = { text, kind }; drawBanners(); }
+function clearBanner(key) { delete banners[key]; drawBanners(); }
+function drawBanners() {
+  $('#banners').innerHTML = Object.values(banners).map((b) => `<div class="banner ${b.kind}">${esc(b.text)}</div>`).join('');
+}
+
+// ---------- trading
+async function trade(res, side) {
+  const input = $('#q-' + res);
+  const qty = parseInt(input.value, 10);
+  if (!qty || qty < 1) return toast('Enter a quantity first.', true);
+  try {
+    me = await api('/api/trade', { method: 'POST', token, body: { resource: res, side, qty } });
+    toast(`${side === 'buy' ? 'Bought' : 'Sold'} ${qty} ${resName(res)}.`);
+    input.value = '';
+    $('#cost-' + res).textContent = '';
+    render();
+  } catch (e) { toast(e.message, true); }
+}
+const resName = (id) => pub?.resources.find((r) => r.id === id)?.name || id;
+
+let planTimer;
+function savePlanSoon() {
+  $('#planState').textContent = 'Saving…';
+  clearTimeout(planTimer);
+  planTimer = setTimeout(async () => {
+    try { me = await api('/api/plan', { method: 'POST', token, body: { plan: draft } }); $('#planState').textContent = 'Plan saved'; renderFigures(); }
+    catch (e) { $('#planState').textContent = ''; toast(e.message, true); }
+  }, 350);
+}
+
+// ---------- render
+let marketKey = '';
+function render() {
+  if (!pub || !me) return;
+  const c = pub.config;
+  document.title = `${me.name} · ${c.gameName}`;
+  $('#brand').textContent = c.gameName;
+  $('#tName').textContent = me.name;
+  $('#tCash').textContent = fmt(me.cash);
+  $('#tPts').textContent = fmt1(me.powerPoints);
+
+  const r = pub.round;
+  $('#roundLabel').textContent = r ? `Round ${r.number} of ${pub.totalRounds}${r.multiplier !== 1 ? ` · ×${r.multiplier} points` : ''}` : 'Round';
+  $('#roundTitle').textContent = r ? r.title : PP.statusText[pub.status];
+
+  // status transitions
+  if (pub.status !== lastStatus) {
+    if (pub.status === 'running') warned = false;
+    lastStatus = pub.status;
+  }
+  pub.status === 'paused' ? banner('The round is paused by the organisers.', 'info', 'pause') : clearBanner('pause');
+
+  const latestFlash = r?.flash?.length ? r.flash[r.flash.length - 1] : null;
+  if (latestFlash && ['running', 'paused'].includes(pub.status)) banner('Flash news: ' + latestFlash.text, 'flash', 'flash'); else clearBanner('flash');
+
+  if (pub.status === 'lobby' || !r) {
+    $('#live').classList.add('hidden');
+    $('#idle').classList.remove('hidden');
+    $('#idle').innerHTML = `<h2>You're registered</h2><p>The first round hasn't started yet. Keep this page open; it updates by itself.</p><p class="muted">Starting credits: ${fmt(c.startingCredits)}</p>`;
+    return;
+  }
+  $('#idle').classList.add('hidden');
+  $('#live').classList.remove('hidden');
+
+  if (draftRound !== r.number) { draftRound = r.number; draft = { ...(me.plan || {}) }; marketKey = ''; }
+
+  // news
+  $('#news').innerHTML = r.headlines.map((h) => `<li>${esc(h)}</li>`).join('');
+  $('#flashList').innerHTML = (r.flash || []).map((f) => `<div class="flash-item">${esc(f.text)}</div>`).join('');
+
+  renderMarket();
+  $('#genPanel').classList.toggle('hidden', !['running', 'paused'].includes(pub.status));
+  renderGeneration();
+  renderResults();
+  renderHistory();
+  renderLeaderboard();
+  tick();
+}
+
+function renderMarket() {
+  const r = pub.round;
+  const open = pub.status === 'running';
+  const key = pub.resources.map((x) => x.id).join() + r.number;
+  if (key !== marketKey) {
+    marketKey = key;
+    $('#marketBody').innerHTML = pub.resources.map((x) => `
+      <tr>
+        <td><span class="swatch" style="background:${esc(x.color)}"></span><b>${esc(x.name)}</b><div class="tags">
+          ${x.green ? '<span class="tag green">Green</span>' : ''}
+          ${x.weather ? '<span class="tag" title="Output depends on the weather, revealed after the round">Weather</span>' : ''}
+          ${!x.storable ? '<span class="tag" title="Unused units vanish when the round ends">Expires</span>' : ''}</div></td>
+        <td class="r num" id="pp-${x.id}"></td>
+        <td class="r num" id="p-${x.id}"></td>
+        <td class="r num" id="tx-${x.id}"></td>
+        <td class="r num" id="m-${x.id}"></td>
+        <td class="r num" id="c-${x.id}"></td>
+        <td class="r num" id="h-${x.id}"></td>
+        <td><div class="trade">
+          <input class="qty" id="q-${x.id}" type="number" min="1" inputmode="numeric" aria-label="Quantity of ${esc(x.name)}">
+          <button class="primary" data-act="buy" data-res="${x.id}">Buy</button>
+          <button data-act="sell" data-res="${x.id}">Sell</button>
+        </div><small class="muted" id="cost-${x.id}"></small></td>
+      </tr>`).join('');
+    $('#marketBody').querySelectorAll('button[data-act]').forEach((b) => b.onclick = () => trade(b.dataset.res, b.dataset.act));
+    $('#marketBody').querySelectorAll('input.qty').forEach((i) => {
+      i.oninput = () => {
+        const id = i.id.slice(2); const q = parseInt(i.value, 10) || 0;
+        $('#cost-' + id).textContent = q ? `${fmt(q * (pub.round.prices[id] || 0))} credits` : '';
+      };
+      i.onkeydown = (e) => { if (e.key === 'Enter') trade(i.id.slice(2), 'buy'); };
+    });
+  }
+  for (const x of pub.resources) {
+    const price = r.prices[x.id] ?? 0;
+    const prev = r.prevPrices?.[x.id];
+    let change = '';
+    if (prev != null && prev !== 0) {
+      const d = ((price - prev) / prev) * 100;
+      change = d === 0 ? '' : ` <small class="${d > 0 ? 'up' : 'down'}">${d > 0 ? '▲' : '▼'} ${Math.abs(d).toFixed(1)}%</small>`;
+    }
+    $('#pp-' + x.id).textContent = prev != null ? fmt(prev) : '–';
+    $('#p-' + x.id).innerHTML = `<b>${fmt(price)}</b>${change}`;
+    $('#tx-' + x.id).textContent = r.carbonTax?.[x.id] ? fmt(r.carbonTax[x.id]) + '/unit' : '–';
+    $('#m-' + x.id).textContent = fmt(r.market?.[x.id] ?? 0);
+    const left = Math.max(0, (r.caps?.[x.id] ?? 0) - (me.bought?.[x.id] || 0));
+    $('#c-' + x.id).textContent = `${fmt(Math.min(left, r.market?.[x.id] ?? 0))} more`;
+    $('#h-' + x.id).textContent = fmt(me.inventory?.[x.id] || 0);
+  }
+  $('#marketBody').querySelectorAll('button, input').forEach((el) => el.disabled = !open);
+  $('#marketNote').textContent = open ? 'Prices are fixed for this round.' : 'Trading is closed.';
+}
+
+function renderGeneration() {
+  const open = pub.status === 'running';
+  const held = pub.resources.filter((x) => (me.inventory?.[x.id] || 0) > 0 || (draft[x.id] || 0) > 0);
+  // clamp draft to holdings
+  for (const x of pub.resources) draft[x.id] = Math.min(draft[x.id] || 0, me.inventory?.[x.id] || 0);
+  const focused = document.activeElement?.dataset?.gen;
+  const key = held.map((x) => x.id).join();
+  if ($('#genRows').dataset.key !== key || !focused) {
+    $('#genRows').dataset.key = key;
+    $('#genRows').innerHTML = held.length ? held.map((x) => `
+      <div class="gen-row">
+        <div><span class="swatch" style="background:${esc(x.color)}"></span>${esc(x.name)} <small class="muted">(you hold ${fmt(me.inventory[x.id] || 0)})</small></div>
+        <input type="number" min="0" max="${me.inventory[x.id] || 0}" value="${draft[x.id] || 0}" data-gen="${x.id}" aria-label="${esc(x.name)} units to generate" ${open ? '' : 'disabled'}>
+        <div class="num" id="mw-${x.id}"></div>
+      </div>`).join('') : '<p class="muted">You hold no resources yet. Buy some in the market above.</p>';
+    $('#genRows').querySelectorAll('input[data-gen]').forEach((i) => i.oninput = () => {
+      const id = i.dataset.gen; const max = me.inventory?.[id] || 0;
+      let v = Math.max(0, parseInt(i.value, 10) || 0);
+      if (v > max) { v = max; i.value = v; }
+      draft[id] = v; renderFigures(); savePlanSoon();
+    });
+  }
+  renderFigures();
+}
+
+function renderFigures() {
+  const r = pub.round; const c = pub.config;
+  let firmMW = 0, maxMW = 0, greenMax = 0, tax = 0;
+  const segs = [];
+  for (const x of pub.resources) {
+    const u = draft[x.id] || 0;
+    const el = $('#mw-' + x.id);
+    if (el) el.textContent = x.weather ? `up to ${fmt(u)} MW` : `${fmt(u)} MW`;
+    if (!u) continue;
+    maxMW += u; if (!x.weather) firmMW += u; if (x.green) greenMax += u;
+    tax += u * (r.carbonTax?.[x.id] || 0);
+    segs.push({ color: x.color, mw: u, weather: x.weather });
+  }
+  const scale = Math.max(r.target * 1.25, maxMW, 1);
+  $('#meter').innerHTML = segs.map((s) => `<div class="seg" style="width:${(s.mw / scale) * 100}%;background:${s.color};${s.weather ? 'opacity:.6' : ''}"></div>`).join('') +
+    `<div class="mark target" style="left:${(r.target / scale) * 100}%"></div><div class="mark black" style="left:${((r.target * c.blackoutThreshold / 100) / scale) * 100}%"></div>`;
+  const delivered = Math.min(maxMW, r.target);
+  const greenPct = delivered ? Math.min(greenMax, delivered) / delivered * 100 : 0;
+  const weatherNote = maxMW > firmMW ? `${fmt(firmMW)}–${fmt(maxMW)}` : fmt(maxMW);
+  $('#figures').innerHTML = `
+    <div><small class="muted">Target</small><b>${fmt(r.target)} MW</b></div>
+    <div><small class="muted">Planned output</small><b>${weatherNote} MW</b></div>
+    <div><small class="muted">Blackout below</small><b>${fmt(r.target * c.blackoutThreshold / 100)} MW</b></div>
+    <div><small class="muted">Green share (best case)</small><b>${greenPct.toFixed(0)}%</b></div>
+    <div><small class="muted">Grid pays (best case)</small><b>${fmt(delivered * c.tariff)}</b></div>
+    <div><small class="muted">Carbon tax</small><b>${fmt(tax)}</b></div>`;
+}
+
+function renderResults() {
+  const panel = $('#resultPanel');
+  const lr = me.lastResult;
+  if (!(pub.status === 'results' || pub.status === 'finished') || !lr || !pub.lastResults) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+  const eff = pub.lastResults.efficiency || {};
+  const weatherRes = pub.resources.filter((x) => x.weather);
+  panel.innerHTML = `
+    <h2>Round ${lr.round} results</h2>
+    ${lr.blackout ? `<p class="banner flash">Blackout. You delivered ${fmt1(lr.totalMW)} of ${fmt(lr.target)} MW.</p>` : ''}
+    <p>${weatherRes.length ? 'Weather this round: ' + weatherRes.map((x) => `${esc(x.name)} produced ${eff[x.id] ?? 100}%`).join(', ') + '.' : ''}</p>
+    <div class="figures">
+      <div><small class="muted">Delivered</small><b>${fmt1(lr.totalMW)} / ${fmt(lr.target)} MW</b></div>
+      <div><small class="muted">Target points</small><b>${fmt1(lr.basePoints)}</b></div>
+      <div><small class="muted">Green bonus</small><b>${lr.greenBonus ? '+' + lr.greenBonus : '0'} <small>(${fmt1(lr.greenShare)}% green)</small></b></div>
+      <div><small class="muted">Round points${lr.multiplier !== 1 ? ' ×' + lr.multiplier : ''}</small><b>${fmt1(lr.points)}</b></div>
+      <div><small class="muted">Grid paid</small><b>${fmt(lr.revenue)}</b></div>
+      <div><small class="muted">Carbon tax</small><b>${fmt(lr.tax)}</b></div>
+    </div>
+    ${Object.keys(lr.expired || {}).length ? `<p class="muted" style="margin-top:.8rem">Expired unused: ${Object.entries(lr.expired).map(([k, v]) => `${fmt(v)} ${esc(resName(k))}`).join(', ')}.</p>` : ''}
+    ${pub.status === 'finished' ? `<h3 style="margin-top:1rem">Final score: ${fmt1(me.total)}</h3><p class="muted">Power ${fmt1(me.powerPoints)} + trading ${fmt1(me.tradingPoints)} (net worth ${fmt(me.netWorth)})</p>` : '<p class="muted" style="margin-top:.8rem">Next round starts when the organisers open it.</p>'}`;
+}
+
+function renderHistory() {
+  $('#hist').innerHTML = (me.history || []).map((h) => `<tr>
+    <td>${h.round}. ${esc(h.title)}</td><td class="r num">${fmt1(h.totalMW)} / ${fmt(h.target)}${h.blackout ? ' <span class="up">blackout</span>' : ''}</td>
+    <td class="r num">${fmt1(h.greenShare)}%</td><td class="r num">${fmt1(h.points)}</td><td class="r num">${fmt(h.revenue)}</td>
+    <td class="r num">${fmt(h.tax)}</td><td class="r num">${fmt(h.cashAfter)}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">No completed rounds yet.</td></tr>';
+}
+
+function renderLeaderboard() {
+  const lb = pub.leaderboard;
+  if (!lb) { $('#lb').innerHTML = '<p class="muted">The leaderboard is hidden for this round.</p>'; return; }
+  const top = lb.slice(0, 10);
+  const mine = lb.find((x) => x.name === me.name);
+  if (mine && !top.includes(mine)) top.push(mine);
+  $('#lb').innerHTML = `<table><thead><tr><th>#</th><th>Team</th><th class="r">Score</th></tr></thead><tbody>${
+    top.map((x) => `<tr class="${x.name === me.name ? 'lb-me' : ''}"><td>${x.rank}</td><td>${esc(x.name)}</td><td class="r num">${fmt1(x.total)}</td></tr>`).join('')}</tbody></table>`;
+}
+
+function tick() {
+  if (!pub) return;
+  const ms = PP.remainingMs(pub);
+  const clock = $('#clock');
+  const live = ['running', 'paused'].includes(pub.status);
+  clock.textContent = live ? PP.clockText(ms) : '–:––';
+  $('#clockLabel').textContent = pub.status === 'paused' ? 'Paused' : 'Time left';
+  const warnAt = (pub.config.warningSec || 60) * 1000;
+  const warning = pub.status === 'running' && ms <= warnAt && ms > 0;
+  clock.classList.toggle('warn', warning);
+  if (warning) {
+    banner(`Less than ${Math.ceil(warnAt / 1000)} seconds left. Make sure your generation plan is set.`, 'warn', 'warn');
+    if (!warned) { warned = true; PP.beep(); }
+  } else clearBanner('warn');
+  if (pub.status === 'running' && ms === 0) {
+    $('#marketBody').querySelectorAll('button, input').forEach((el) => el.disabled = true);
+    $('#genRows').querySelectorAll('input').forEach((el) => el.disabled = true);
+  }
+}
+setInterval(tick, 250);
+</script>
+</body>
+</html>

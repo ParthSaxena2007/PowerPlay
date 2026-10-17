@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Projector</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+<style>
+  :root { --bg: #0f1720; --surface: #17222d; --sunken: #121b24; --ink: #e6ecf1; --muted: #93a1ae; --line: #2a3743; --signal: #f0b429; --danger: #f97316; color-scheme: dark; }
+  body { font-size: 1.25rem; min-height: 100vh; }
+  .head { display: flex; justify-content: space-between; align-items: flex-end; gap: 2rem; padding: 2rem 2.5rem 1rem; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .head h1 { font-size: clamp(2.5rem, 5vw, 4.5rem); margin: 0; }
+  .head .clock { font-size: clamp(4rem, 10vw, 9rem); }
+  .body { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 2.5rem; padding: 1.5rem 2.5rem; }
+  .news li { font-size: 1.5rem; margin-bottom: 1rem; }
+  .flash { background: var(--danger); color: #fff; padding: 1rem 1.4rem; font-size: 1.6rem; font-weight: 600; border-radius: 4px; margin-bottom: 1rem; }
+  table { font-size: 1.3rem; }
+  td, th { padding: .5rem .6rem; }
+  .podium { text-align: center; padding: 3rem 1rem; }
+  .podium h1 { font-size: clamp(3rem, 8vw, 6rem); }
+  .podium .row { justify-content: center; align-items: flex-end; gap: 2rem; margin-top: 2rem; }
+  .step { background: var(--surface); border: 1px solid var(--line); padding: 1.5rem 2rem; min-width: 220px; border-radius: 4px; }
+  .step b { display: block; font-family: var(--display); font-size: 2.2rem; }
+  @media (max-width: 900px) { .body { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script src="/socket.io/socket.io.js"></script>
+<script src="/common.js"></script>
+<script>
+const { $, esc, fmt, fmt1 } = PP;
+let pub = null;
+const socket = io();
+socket.on('public', (p) => { PP.syncClock(p.serverNow); pub = p; render(); });
+socket.on('flash', () => PP.beep());
+
+function lbTable(lb, n = 12) {
+  if (!lb) return '<p class="muted" style="font-size:1.6rem">The leaderboard is hidden for this round.</p>';
+  if (!lb.length) return '<p class="muted">No teams registered yet.</p>';
+  return `<table><thead><tr><th>#</th><th>Team</th><th class="r">Power</th><th class="r">Trading</th><th class="r">Score</th></tr></thead><tbody>${
+    lb.slice(0, n).map((x) => `<tr><td>${x.rank}</td><td>${esc(x.name)}</td><td class="r num">${fmt1(x.powerPoints)}</td><td class="r num">${fmt1(x.tradingPoints)}</td><td class="r num"><b>${fmt1(x.total)}</b></td></tr>`).join('')}</tbody></table>`;
+}
+
+function render() {
+  if (!pub) return;
+  const c = pub.config, r = pub.round;
+  document.title = c.gameName + ' projector';
+  if (pub.status === 'finished') {
+    const lb = pub.leaderboard || [];
+    const order = [lb[1], lb[0], lb[2]].filter(Boolean);
+    $('#app').innerHTML = `<div class="podium"><h1>${esc(c.gameName)} results</h1>
+      <div class="row">${order.map((x) => `<div class="step" style="${x.rank === 1 ? 'padding-top:3rem;border-color:var(--signal)' : ''}"><small class="muted">${['', 'Winner', 'Second', 'Third'][x.rank]}</small><b>${esc(x.name)}</b><span class="num">${fmt1(x.total)} points</span></div>`).join('')}</div>
+      <div style="max-width:900px;margin:3rem auto 0;text-align:left">${lbTable(lb, 30)}</div></div>`;
+    return;
+  }
+  if (pub.status === 'lobby' || !r) {
+    $('#app').innerHTML = `<div class="podium"><h1>${esc(c.gameName)}</h1><p style="font-size:1.6rem">${esc(c.clubName)}</p>
+      <p class="num" style="font-size:3rem;margin-top:2rem">${pub.teamCount} teams registered</p>
+      <p class="muted">${pub.totalRounds} rounds · Starting credits ${fmt(c.startingCredits)}</p></div>`;
+    return;
+  }
+  const results = pub.status === 'results';
+  const eff = pub.lastResults?.efficiency || {};
+  $('#app').innerHTML = `
+    <div class="head">
+      <div><small class="muted">Round ${r.number} of ${pub.totalRounds}${r.multiplier !== 1 ? ` · points ×${r.multiplier}` : ''} · Target ${fmt(r.target)} MW</small><h1>${esc(r.title)}</h1></div>
+      <div style="text-align:right"><small class="muted" id="clockLabel"></small><div class="clock" id="clock">–:––</div></div>
+    </div>
+    <div class="body">
+      <section>
+        ${(r.flash || []).map((f) => `<div class="flash">${esc(f.text)}</div>`).join('')}
+        <h2>Headlines</h2>
+        <ul class="news">${r.headlines.map((h) => `<li>${esc(h)}</li>`).join('')}</ul>
+        ${results ? `<h2 style="margin-top:2rem">Weather revealed</h2><p>${pub.resources.filter((x) => x.weather).map((x) => `${esc(x.name)}: ${eff[x.id] ?? 100}%`).join(' &nbsp; ')}</p>` : ''}
+      </section>
+      <section><h2>Leaderboard</h2>${lbTable(pub.leaderboard)}</section>
+    </div>`;
+  tick();
+}
+function tick() {
+  const el = $('#clock'); if (!el || !pub) return;
+  const ms = PP.remainingMs(pub);
+  const live = ['running', 'paused'].includes(pub.status);
+  el.textContent = live ? PP.clockText(ms) : 'Locked';
+  el.classList.toggle('warn', pub.status === 'running' && ms <= (pub.config.warningSec || 60) * 1000 && ms > 0);
+  $('#clockLabel').textContent = pub.status === 'paused' ? 'Paused' : live ? 'Trading closes in' : 'Round results';
+}
+setInterval(tick, 250);
+</script>
+</body>
+</html>

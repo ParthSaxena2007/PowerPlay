@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Power Play</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+<style>
+  .hero { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 2rem; align-items: start; padding: 2.5rem 1rem; }
+  .hero h1 { font-size: clamp(3rem, 8vw, 5.5rem); line-height: .9; margin-bottom: 1rem; }
+  .lede { font-size: 1.15rem; max-width: 52ch; }
+  .mix { display: flex; height: 14px; border-radius: 2px; overflow: hidden; margin: 1.5rem 0 .4rem; max-width: 460px; }
+  .rules { max-width: 60ch; padding-left: 1.2rem; }
+  .rules li { margin-bottom: .4rem; }
+  @media (max-width: 860px) { .hero { grid-template-columns: 1fr; padding-top: 1.5rem; } }
+</style>
+</head>
+<body>
+<header class="topbar"><div class="wrap"><div class="brand" id="brand">Power Play</div><div class="spacer"></div><small id="club"></small></div></header>
+
+<main class="wrap hero">
+  <section>
+    <h1>Keep the lights on. Read the market.</h1>
+    <p class="lede">You run a power company. Each round, meet the city's demand and trade energy before the news moves prices.</p>
+    <div class="mix" id="mix" aria-hidden="true"></div>
+    <small class="muted" id="mixLabel"></small>
+    <h2 style="margin-top:2rem">How it works</h2>
+    <ul class="rules" id="rules"></ul>
+  </section>
+
+  <section class="panel">
+    <div class="tabs" role="tablist">
+      <button role="tab" aria-selected="true" data-tab="login">Log in</button>
+      <button role="tab" aria-selected="false" data-tab="register">Register team</button>
+    </div>
+    <form id="loginForm" autocomplete="on">
+      <div class="field"><label for="lName">Team name</label><input id="lName" required autocomplete="username"></div>
+      <div class="field"><label for="lPw">Password</label><input id="lPw" type="password" required autocomplete="current-password"></div>
+      <button class="primary" type="submit">Log in</button>
+    </form>
+    <form id="regForm" class="hidden">
+      <p id="regClosed" class="banner info hidden">Registration is closed. Ask the organisers for your team login.</p>
+      <div class="field"><label for="rName">Team name</label><input id="rName" required maxlength="40"></div>
+      <div id="members"></div>
+      <div class="field"><label for="rPw">Team password (both of you will use it)</label><input id="rPw" type="password" required minlength="4" autocomplete="new-password"></div>
+      <button class="primary" type="submit">Register team</button>
+    </form>
+  </section>
+</main>
+
+<script src="/common.js"></script>
+<script>
+const { $, api, toast, esc, fmt } = PP;
+if (localStorage.getItem('pp_token')) location.href = '/play';
+
+document.querySelectorAll('[data-tab]').forEach((b) => b.onclick = () => {
+  document.querySelectorAll('[data-tab]').forEach((x) => x.setAttribute('aria-selected', x === b));
+  $('#loginForm').classList.toggle('hidden', b.dataset.tab !== 'login');
+  $('#regForm').classList.toggle('hidden', b.dataset.tab !== 'register');
+});
+
+api('/api/public').then((p) => {
+  const c = p.config;
+  document.title = c.gameName;
+  $('#brand').textContent = c.gameName;
+  $('#club').textContent = c.clubName;
+  $('#mix').innerHTML = p.resources.map((r) => `<span style="flex:1;background:${esc(r.color)}"></span>`).join('');
+  $('#mixLabel').textContent = p.resources.map((r) => r.name).join(', ');
+  const size = c.teamSizeMin === c.teamSizeMax ? c.teamSizeMin : `${c.teamSizeMin} to ${c.teamSizeMax}`;
+  $('#rules').innerHTML = [
+    `Teams of ${size}. Every team starts with ${fmt(c.startingCredits)} credits.`,
+    `Each round has a power target. Meeting it earns up to ${c.targetPoints} points, and the grid pays ${fmt(c.tariff)} credits per MW delivered.`,
+    `Deliver less than ${c.blackoutThreshold}% of the target and it's a blackout: zero points that round.`,
+    `Get ${c.greenThreshold}% or more of your delivered power from green sources for a +${c.greenBonus} bonus.`,
+    `Prices are fixed during a round and reset each round based on the news. Not every headline matters, and not every headline is true.`,
+    `Weather-dependent output is revealed after the round. Resources marked as expiring vanish if unused.`,
+    `Grow your net worth by buying low and selling high. It adds to your final score.`,
+  ].map((t) => `<li>${esc(t)}</li>`).join('');
+  const n = Math.max(1, c.teamSizeMax);
+  $('#members').innerHTML = Array.from({ length: n }, (_, i) =>
+    `<div class="field"><label for="m${i}">Member ${i + 1}${i >= c.teamSizeMin ? ' (optional)' : ''}</label><input id="m${i}" ${i < c.teamSizeMin ? 'required' : ''} maxlength="60"></div>`).join('');
+  $('#regClosed').classList.toggle('hidden', c.registrationOpen);
+});
+
+function done(res) { localStorage.setItem('pp_token', res.token); location.href = '/play'; }
+$('#loginForm').onsubmit = async (e) => {
+  e.preventDefault();
+  try { done(await api('/api/login', { method: 'POST', body: { name: $('#lName').value, password: $('#lPw').value } })); }
+  catch (err) { toast(err.message, true); }
+};
+$('#regForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const members = [...document.querySelectorAll('#members input')].map((i) => i.value.trim()).filter(Boolean);
+  try { done(await api('/api/register', { method: 'POST', body: { name: $('#rName').value, members, password: $('#rPw').value } })); }
+  catch (err) { toast(err.message, true); }
+};
+</script>
+</body>
+</html>

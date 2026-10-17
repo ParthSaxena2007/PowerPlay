@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin · Power Play</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+<style>
+  .controls { display: flex; flex-wrap: wrap; gap: .5rem; }
+  details.round { border: 1px solid var(--line); border-radius: var(--radius-s); margin-bottom: .6rem; background: var(--surface); }
+  details.round > summary { cursor: pointer; padding: .7rem 1rem; font-weight: 600; display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; }
+  details.round > div { padding: 0 1rem 1rem; }
+  .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: .6rem; }
+  .cell input { min-width: 80px; }
+  td input { min-height: 34px; padding: .25rem .4rem; }
+  .check { display: flex; gap: .4rem; align-items: center; color: var(--ink); }
+  .dirty { color: var(--danger); font-weight: 600; }
+  .warnline { color: var(--danger); }
+  .okline { color: var(--ok); }
+  textarea.mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .85rem; min-height: 420px; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap">
+    <div class="brand">Admin</div>
+    <div class="stat"><small>Status</small><b id="hStatus">–</b></div>
+    <div class="stat"><small>Round</small><b id="hRound">–</b></div>
+    <div class="stat"><small>Teams</small><b id="hTeams">–</b></div>
+    <div class="spacer"></div>
+    <div class="stat"><small id="hClockLabel">Server lock in</small><span class="clock" id="hClock">–:––</span></div>
+    <button class="ghost" id="logout" style="color:inherit;border-color:currentColor">Log out</button>
+  </div>
+</header>
+
+<main class="wrap">
+  <section id="loginBox" class="panel hidden" style="max-width:420px;margin:3rem auto">
+    <h2>Admin login</h2>
+    <form id="loginForm"><div class="field"><label for="apw">Admin password</label><input id="apw" type="password" required></div><button class="primary">Log in</button></form>
+  </section>
+
+  <div id="appBox" class="hidden">
+    <div class="tabs" role="tablist" id="tabs">
+      <button data-tab="control" aria-selected="true">Live control</button>
+      <button data-tab="rounds" aria-selected="false">Rounds</button>
+      <button data-tab="resources" aria-selected="false">Resources</button>
+      <button data-tab="settings" aria-selected="false">Settings</button>
+      <button data-tab="teams" aria-selected="false">Teams</button>
+      <button data-tab="raw" aria-selected="false">Raw data</button>
+    </div>
+
+    <!-- CONTROL -->
+    <section data-pane="control" class="stack">
+      <div class="panel stack">
+        <div class="controls">
+          <button class="primary" data-ctl="start">Start next round</button>
+          <button data-ctl="pause">Pause</button>
+          <button data-ctl="resume">Resume</button>
+          <button data-ctl="extend" data-sec="60">+1 min</button>
+          <button data-ctl="extend" data-sec="-60">−1 min</button>
+          <button data-ctl="end">End round now</button>
+          <button data-ctl="finish">Finish game</button>
+          <span style="flex:1"></span>
+          <a class="btn" href="/screen" target="_blank" rel="noopener">Open projector</a>
+          <a class="btn" id="csv" href="#">Download results CSV</a>
+        </div>
+        <form id="flashForm" class="row">
+          <input id="flashText" placeholder="Type flash news to send to every team right now" style="flex:1;min-width:240px">
+          <button class="danger">Send flash news</button>
+        </form>
+        <div id="nextPreview"></div>
+      </div>
+      <div class="panel">
+        <h2>Teams live</h2>
+        <div class="scroll-x"><table><thead id="liveHead"></thead><tbody id="liveBody"></tbody></table></div>
+      </div>
+      <div class="panel">
+        <h2>Danger zone</h2>
+        <div class="controls">
+          <button class="danger" data-ctl="reset-game">Reset game (keep teams and settings)</button>
+          <button class="danger" data-ctl="reset-all">Restore default settings and rounds</button>
+          <button class="danger" data-ctl="delete-all-teams">Delete all teams</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ROUNDS -->
+    <section data-pane="rounds" class="stack hidden">
+      <div class="row spread">
+        <p class="muted" style="margin:0">Edit everything about each round. Changes apply when you save. Editing the current round changes it live.</p>
+        <div class="row"><span id="roundsDirty"></span><button id="addRound">Add round</button><button id="discardRounds">Discard changes</button><button class="primary" id="saveRounds">Save rounds</button></div>
+      </div>
+      <div id="roundsList"></div>
+    </section>
+
+    <!-- RESOURCES -->
+    <section data-pane="resources" class="stack hidden">
+      <div class="panel">
+        <div class="row spread"><h2>Resources</h2><div class="row"><button id="addRes">Add resource</button><button class="primary" id="saveRes">Save resources</button></div></div>
+        <p class="muted">End value is the price used to value leftover holdings when the game finishes.</p>
+        <div class="scroll-x"><table><thead><tr><th>Id</th><th>Name</th><th>Colour</th><th>Green</th><th>Storable</th><th>Weather-dependent</th><th class="r">End value</th><th></th></tr></thead><tbody id="resBody"></tbody></table></div>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section data-pane="settings" class="stack hidden">
+      <form class="panel" id="settingsForm">
+        <div class="row spread"><h2>Game settings</h2><button class="primary">Save settings</button></div>
+        <div class="fields" id="settingsFields"></div>
+      </form>
+    </section>
+
+    <!-- TEAMS -->
+    <section data-pane="teams" class="stack hidden">
+      <form class="panel" id="newTeam">
+        <h2>Create a team</h2>
+        <div class="fields">
+          <div><label for="ntName">Team name</label><input id="ntName" required></div>
+          <div><label for="ntM1">Member 1</label><input id="ntM1"></div>
+          <div><label for="ntM2">Member 2</label><input id="ntM2"></div>
+          <div><label for="ntPw">Password</label><input id="ntPw" required minlength="4"></div>
+        </div>
+        <button class="primary" style="margin-top:.6rem">Create team</button>
+      </form>
+      <div class="panel"><h2>All teams</h2><div id="teamsList"></div></div>
+    </section>
+
+    <!-- RAW -->
+    <section data-pane="raw" class="stack hidden">
+      <div class="panel stack">
+        <p class="muted">Every setting, resource and round as JSON. Use this for bulk edits or to copy a full setup between events.</p>
+        <textarea class="mono" id="rawText" spellcheck="false"></textarea>
+        <div class="row"><button id="rawLoad">Reload from server</button><button class="primary" id="rawSave">Save all</button></div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/common.js"></script>
+<script>
+const { $, api, toast, esc, fmt, fmt1 } = PP;
+let token = localStorage.getItem('pp_admin');
+let S = null;               // latest admin state
+let roundsDraft = null, roundsDirty = false;
+let resDraft = null, resDirty = false;
+let socket;
+
+const settingLabels = {
+  gameName: 'Game name', clubName: 'Club name', startingCredits: 'Starting credits', tariff: 'Grid pays per MW',
+  targetPoints: 'Points for meeting target', blackoutThreshold: 'Blackout below (% of target)', greenBonus: 'Green bonus points',
+  greenThreshold: 'Green bonus threshold (%)', creditsPerPoint: 'Net-worth growth per trading point', cashWeight: 'Trading points weight',
+  lockBufferSec: 'Screen timer ends early by (sec)', warningSec: 'Warning before lock (sec)', teamSizeMin: 'Min members per team',
+  teamSizeMax: 'Max members per team', registrationOpen: 'Registration open', leaderboardVisible: 'Leaderboard visible to teams',
+};
+
+// ---------- auth
+function showLogin() { $('#loginBox').classList.remove('hidden'); $('#appBox').classList.add('hidden'); }
+$('#loginForm').onsubmit = async (e) => {
+  e.preventDefault();
+  try { token = (await api('/api/admin/login', { method: 'POST', body: { password: $('#apw').value } })).token; localStorage.setItem('pp_admin', token); boot(); }
+  catch (err) { toast(err.message, true); }
+};
+$('#logout').onclick = () => { localStorage.removeItem('pp_admin'); location.reload(); };
+
+async function call(path, method, body) {
+  try { const s = await api(path, { method, body, token }); setState(s); return s; }
+  catch (e) { if (/Admin login/.test(e.message)) { localStorage.removeItem('pp_admin'); showLogin(); } toast(e.message, true); throw e; }
+}
+
+async function boot() {
+  if (!token) return showLogin();
+  try { setState(await api('/api/admin/state', { token })); }
+  catch { localStorage.removeItem('pp_admin'); return showLogin(); }
+  $('#loginBox').classList.add('hidden'); $('#appBox').classList.remove('hidden');
+  socket = io({ auth: { token, role: 'admin' } });
+  socket.on('admin', setState);
+  socket.on('public', (p) => PP.syncClock(p.serverNow));
+}
+
+function setState(s) {
+  S = s; PP.syncClock(s.serverNow);
+  if (!roundsDirty) roundsDraft = structuredClone(s.rounds);
+  if (!resDirty) resDraft = structuredClone(s.resources);
+  renderHeader(); renderControl();
+  if (!roundsDirty) renderRounds();
+  if (!resDirty) renderResources();
+  renderSettings(false); renderTeams();
+}
+
+// ---------- tabs
+$('#tabs').onclick = (e) => {
+  const b = e.target.closest('[data-tab]'); if (!b) return;
+  document.querySelectorAll('#tabs button').forEach((x) => x.setAttribute('aria-selected', x === b));
+  document.querySelectorAll('[data-pane]').forEach((p) => p.classList.toggle('hidden', p.dataset.pane !== b.dataset.tab));
+  if (b.dataset.tab === 'raw') loadRaw();
+  if (b.dataset.tab === 'settings') renderSettings(true);
+};
+
+// ---------- header + clock
+function renderHeader() {
+  const g = S.game;
+  $('#hStatus').textContent = PP.statusText[g.status];
+  const r = S.rounds[g.roundIndex];
+  $('#hRound').textContent = r ? `${g.roundIndex + 1}/${S.rounds.length} ${r.title}` : `0/${S.rounds.length}`;
+  $('#hTeams').textContent = S.teams.length;
+}
+setInterval(() => {
+  if (!S) return;
+  const g = S.game;
+  let ms = 0;
+  if (g.status === 'running') ms = g.endsAt - PP.serverNow();
+  if (g.status === 'paused') ms = g.remainingMs;
+  $('#hClock').textContent = ['running', 'paused'].includes(g.status) ? PP.clockText(ms) : '–:––';
+  $('#hClockLabel').textContent = g.status === 'paused' ? 'Paused' : 'Server lock in';
+}, 250);
+
+// ---------- control
+const confirms = {
+  end: 'End the round now and score it?', finish: 'Finish the game? Leftover holdings will be valued at end values.',
+  'reset-game': 'Reset all scores, cash and holdings and go back to the lobby? Teams are kept.',
+  'reset-all': 'Restore default settings, resources and rounds, and reset the game? Teams are kept.',
+  'delete-all-teams': 'Delete every team? This cannot be undone.',
+};
+document.querySelectorAll('[data-ctl]').forEach((b) => b.onclick = async () => {
+  const action = b.dataset.ctl;
+  if (confirms[action] && !confirm(confirms[action])) return;
+  if (action === 'start' && roundsDirty && !confirm('You have unsaved round edits. Start anyway with the saved version?')) return;
+  try { await call('/api/admin/control', 'POST', { action, seconds: Number(b.dataset.sec || 60) }); if (action === 'reset-all') { roundsDirty = resDirty = false; setState(S); } toast('Done.'); } catch {}
+});
+$('#flashForm').onsubmit = async (e) => {
+  e.preventDefault();
+  try { await call('/api/admin/control', 'POST', { action: 'flash', text: $('#flashText').value }); $('#flashText').value = ''; toast('Flash news sent.'); } catch {}
+};
+$('#csv').onclick = (e) => { e.preventDefault(); location.href = '/api/admin/export.csv?token=' + encodeURIComponent(token); };
+
+function economics(r, config, resources, teamCount) {
+  const n = Math.max(1, teamCount);
+  const lines = [];
+  let totalSupplyMW = 0, greenCapPerTeam = 0;
+  for (const x of resources) {
+    const eff = (r.efficiency?.[x.id] ?? 100) / 100;
+    const margin = config.tariff * eff - (r.prices?.[x.id] || 0) - (r.carbonTax?.[x.id] || 0);
+    const supply = Math.round((r.supplyPerTeam?.[x.id] || 0) * n);
+    const cap = (r.caps && r.caps[x.id] != null && r.caps[x.id] !== '') ? Number(r.caps[x.id]) : Math.ceil((r.supplyPerTeam?.[x.id] || 0) * (r.capMultiplier ?? 2));
+    totalSupplyMW += supply * eff;
+    if (x.green) greenCapPerTeam += Math.min(cap, supply) * eff;
+    lines.push({ x, margin, supply, cap });
+  }
+  const demand = r.target * n;
+  const greenNeed = r.target * config.greenThreshold / 100;
+  return { lines, demand, totalSupplyMW, ratio: totalSupplyMW / Math.max(1, demand), greenCapPerTeam, greenNeed };
+}
+
+function econHtml(r) {
+  const e = economics(r, S.config, S.resources, S.teams.length);
+  return `<div class="scroll-x"><table><thead><tr><th>Resource</th><th class="r">Market supply</th><th class="r">Per-team cap</th><th class="r">Profit per unit if burned</th></tr></thead><tbody>${
+    e.lines.map((l) => `<tr><td><span class="swatch" style="background:${esc(l.x.color)}"></span>${esc(l.x.name)}</td><td class="r num">${fmt(l.supply)}</td><td class="r num">${fmt(l.cap)}</td><td class="r num ${l.margin < 0 ? 'warnline' : 'okline'}">${fmt(l.margin)}</td></tr>`).join('')}</tbody></table></div>
+    <p style="margin-top:.6rem">Total demand ${fmt(e.demand)} MW for ${S.teams.length || 1} team(s). Supply covers <b class="${e.ratio < 1.1 ? 'warnline' : 'okline'}">${e.ratio.toFixed(2)}×</b> demand at this round's weather.
+    One team can buy at most ${fmt1(e.greenCapPerTeam)} green MW; the green bonus needs ${fmt1(e.greenNeed)} MW (${e.greenCapPerTeam >= e.greenNeed ? '<span class="okline">reachable</span>' : '<span class="warnline">not reachable</span>'}).</p>`;
+}
+
+function renderControl() {
+  const g = S.game;
+  const next = S.rounds[g.roundIndex + 1];
+  const cur = S.rounds[g.roundIndex];
+  const show = ['running', 'paused'].includes(g.status) ? cur : next;
+  $('#nextPreview').innerHTML = show ? `<h3>${show === cur ? 'Current' : 'Next'} round: ${esc(show.title)} (target ${fmt(show.target)} MW, ${PP.clockText(show.durationSec * 1000)})</h3>${econHtml(show)}`
+    : '<p class="muted">No more rounds. Use "Finish game" to close the competition.</p>';
+
+  const res = S.resources;
+  $('#liveHead').innerHTML = `<tr><th>#</th><th>Team</th><th class="r">Cash</th>${res.map((x) => `<th class="r">${esc(x.name)} held / bought / plan</th>`).join('')}<th class="r">Power pts</th><th class="r">Net worth</th><th class="r">Score</th></tr>`;
+  const byId = Object.fromEntries(S.teams.map((t) => [t.id, t]));
+  $('#liveBody').innerHTML = S.leaderboard.map((l) => {
+    const t = byId[l.id];
+    return `<tr><td>${l.rank}</td><td>${esc(t.name)}</td><td class="r num">${fmt(t.cash)}</td>${res.map((x) => `<td class="r num">${fmt(t.inventory?.[x.id] || 0)} / ${fmt(t.bought?.[x.id] || 0)} / ${fmt(t.plan?.[x.id] || 0)}</td>`).join('')}<td class="r num">${fmt1(t.powerPoints)}</td><td class="r num">${fmt(t.netWorth)}</td><td class="r num"><b>${fmt1(t.total)}</b></td></tr>`;
+  }).join('') || `<tr><td colspan="${res.length + 6}" class="muted">No teams yet.</td></tr>`;
+}
+
+// ---------- rounds editor
+function markRoundsDirty() { roundsDirty = true; $('#roundsDirty').innerHTML = '<span class="dirty">Unsaved changes</span>'; }
+function renderRounds() {
+  $('#roundsDirty').innerHTML = '';
+  const res = S.resources;
+  const open = new Set([...document.querySelectorAll('details.round[open]')].map((d) => d.dataset.i));
+  $('#roundsList').innerHTML = roundsDraft.map((r, i) => `
+    <details class="round" data-i="${i}" ${open.has(String(i)) ? 'open' : ''}>
+      <summary><span>Round ${i + 1}: ${esc(r.title)}</span><small class="muted">${fmt(r.target)} MW · ${PP.clockText(r.durationSec * 1000)} · ×${r.multiplier}${r.hideLeaderboard ? ' · hidden leaderboard' : ''}${(r.flash || []).length ? ` · ${r.flash.length} flash` : ''}</small>
+        ${S.game.roundIndex === i ? '<span class="tag">current</span>' : S.game.roundIndex > i ? '<span class="tag">played</span>' : ''}</summary>
+      <div class="stack">
+        <div class="fields">
+          <div><label>Title</label><input data-f="title" value="${esc(r.title)}"></div>
+          <div><label>Duration (seconds)</label><input type="number" data-f="durationSec" value="${r.durationSec}"></div>
+          <div><label>Target per team (MW)</label><input type="number" data-f="target" value="${r.target}"></div>
+          <div><label>Points multiplier</label><input type="number" step="0.1" data-f="multiplier" value="${r.multiplier}"></div>
+          <div><label>Cap (× fair share)</label><input type="number" step="0.1" data-f="capMultiplier" value="${r.capMultiplier}"></div>
+          <div><label class="check"><input type="checkbox" data-f="hideLeaderboard" ${r.hideLeaderboard ? 'checked' : ''}> Hide leaderboard</label></div>
+        </div>
+        <div class="scroll-x"><table><thead><tr><th>Resource</th><th>Price</th><th>Supply per team</th><th>Cap override (blank = auto)</th><th>Output %</th><th>Carbon tax / unit</th></tr></thead><tbody>
+          ${res.map((x) => `<tr><td><span class="swatch" style="background:${esc(x.color)}"></span>${esc(x.name)}</td>
+            <td class="cell"><input type="number" data-m="prices" data-r="${x.id}" value="${r.prices?.[x.id] ?? 0}"></td>
+            <td class="cell"><input type="number" step="0.5" data-m="supplyPerTeam" data-r="${x.id}" value="${r.supplyPerTeam?.[x.id] ?? 0}"></td>
+            <td class="cell"><input type="number" data-m="caps" data-r="${x.id}" value="${r.caps?.[x.id] ?? ''}"></td>
+            <td class="cell"><input type="number" data-m="efficiency" data-r="${x.id}" value="${r.efficiency?.[x.id] ?? 100}"></td>
+            <td class="cell"><input type="number" data-m="carbonTax" data-r="${x.id}" value="${r.carbonTax?.[x.id] ?? 0}"></td></tr>`).join('')}
+        </tbody></table></div>
+        <div class="grid-2">
+          <div><label>Headlines (one per line)</label><textarea data-f="headlines" rows="5">${esc((r.headlines || []).join('\n'))}</textarea></div>
+          <div><label>Scheduled flash news (one per line: seconds after start | text)</label><textarea data-f="flash" rows="5">${esc((r.flash || []).map((f) => `${f.atSec} | ${f.text}`).join('\n'))}</textarea></div>
+        </div>
+        <div class="econ">${econHtml(r)}</div>
+        <div class="row"><button type="button" data-act="up">Move up</button><button type="button" data-act="down">Move down</button><button type="button" data-act="dup">Duplicate</button><button type="button" class="danger" data-act="del">Delete round</button></div>
+      </div>
+    </details>`).join('');
+
+  document.querySelectorAll('details.round').forEach((d) => {
+    const i = Number(d.dataset.i); const r = roundsDraft[i];
+    d.querySelectorAll('[data-f]').forEach((el) => el.oninput = el.onchange = () => {
+      const f = el.dataset.f;
+      if (f === 'hideLeaderboard') r[f] = el.checked;
+      else if (f === 'headlines') r.headlines = el.value.split('\n').map((s) => s.trim()).filter(Boolean);
+      else if (f === 'flash') r.flash = el.value.split('\n').map((l) => { const m = l.match(/^\s*(\d+)\s*\|\s*(.+)$/); return m ? { atSec: Number(m[1]), text: m[2].trim() } : null; }).filter(Boolean);
+      else if (f === 'title') r.title = el.value;
+      else r[f] = Number(el.value);
+      markRoundsDirty(); d.querySelector('.econ').innerHTML = econHtml(r);
+    });
+    d.querySelectorAll('[data-m]').forEach((el) => el.oninput = () => {
+      const m = el.dataset.m; r[m] = r[m] || {};
+      if (m === 'caps' && el.value === '') delete r[m][el.dataset.r]; else r[m][el.dataset.r] = Number(el.value);
+      markRoundsDirty(); d.querySelector('.econ').innerHTML = econHtml(r);
+    });
+    d.querySelectorAll('[data-act]').forEach((b) => b.onclick = () => {
+      const a = b.dataset.act;
+      if (a === 'del') { if (!confirm('Delete this round?')) return; roundsDraft.splice(i, 1); }
+      if (a === 'dup') roundsDraft.splice(i + 1, 0, { ...structuredClone(r), id: undefined, title: r.title + ' (copy)' });
+      if (a === 'up' && i > 0) [roundsDraft[i - 1], roundsDraft[i]] = [roundsDraft[i], roundsDraft[i - 1]];
+      if (a === 'down' && i < roundsDraft.length - 1) [roundsDraft[i + 1], roundsDraft[i]] = [roundsDraft[i], roundsDraft[i + 1]];
+      renderRounds(); markRoundsDirty();
+    });
+  });
+}
+$('#addRound').onclick = () => {
+  const last = roundsDraft[roundsDraft.length - 1];
+  roundsDraft.push(last ? { ...structuredClone(last), id: undefined, title: 'New round', headlines: [], flash: [], multiplier: 1, hideLeaderboard: false }
+    : { title: 'New round', durationSec: 720, target: 100, multiplier: 1, capMultiplier: 2, prices: {}, supplyPerTeam: {}, efficiency: {}, carbonTax: {}, caps: {}, headlines: [], flash: [] });
+  renderRounds(); markRoundsDirty();
+};
+$('#discardRounds').onclick = () => { roundsDirty = false; roundsDraft = structuredClone(S.rounds); renderRounds(); };
+$('#saveRounds').onclick = async () => { try { roundsDirty = false; await call('/api/admin/rounds', 'PUT', { rounds: roundsDraft }); toast('Rounds saved.'); } catch { roundsDirty = true; } };
+
+// ---------- resources editor
+function renderResources() {
+  $('#resBody').innerHTML = resDraft.map((x, i) => `<tr data-i="${i}">
+    <td><input data-k="id" value="${esc(x.id)}" ${S.resources.some((r) => r.id === x.id) ? 'readonly' : ''} style="max-width:110px"></td>
+    <td><input data-k="name" value="${esc(x.name)}"></td>
+    <td><input data-k="color" type="color" value="${esc(x.color)}" style="width:56px;padding:2px"></td>
+    <td><input data-k="green" type="checkbox" ${x.green ? 'checked' : ''} aria-label="Green"></td>
+    <td><input data-k="storable" type="checkbox" ${x.storable ? 'checked' : ''} aria-label="Storable"></td>
+    <td><input data-k="weather" type="checkbox" ${x.weather ? 'checked' : ''} aria-label="Weather-dependent"></td>
+    <td><input data-k="endValue" type="number" value="${x.endValue}" style="max-width:110px"></td>
+    <td><button class="danger" data-del>Remove</button></td></tr>`).join('');
+  $('#resBody').querySelectorAll('tr').forEach((tr) => {
+    const x = resDraft[Number(tr.dataset.i)];
+    tr.querySelectorAll('[data-k]').forEach((el) => el.oninput = el.onchange = () => {
+      const k = el.dataset.k; x[k] = el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) : el.value; resDirty = true;
+    });
+    tr.querySelector('[data-del]').onclick = () => { if (!confirm(`Remove ${x.name}? Its data in rounds will be ignored.`)) return; resDraft.splice(Number(tr.dataset.i), 1); resDirty = true; renderResources(); };
+  });
+}
+$('#addRes').onclick = () => { resDraft.push({ id: '', name: 'New resource', color: '#888888', green: false, storable: true, weather: false, endValue: 0 }); resDirty = true; renderResources(); };
+$('#saveRes').onclick = async () => {
+  try { resDirty = false; await call('/api/admin/resources', 'PUT', { resources: resDraft }); toast('Resources saved. Set their prices and supply in each round.'); } catch { resDirty = true; }
+};
+
+// ---------- settings
+function renderSettings(force) {
+  const box = $('#settingsFields');
+  if (!force && box.contains(document.activeElement)) return;
+  box.innerHTML = Object.entries(S.config).map(([k, v]) => typeof v === 'boolean'
+    ? `<div><label class="check"><input type="checkbox" name="${k}" ${v ? 'checked' : ''}> ${esc(settingLabels[k] || k)}</label></div>`
+    : `<div><label for="s-${k}">${esc(settingLabels[k] || k)}</label><input id="s-${k}" name="${k}" ${typeof v === 'number' ? 'type="number" step="any"' : ''} value="${esc(v)}"></div>`).join('');
+}
+$('#settingsForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const body = {};
+  $('#settingsForm').querySelectorAll('[name]').forEach((el) => body[el.name] = el.type === 'checkbox' ? el.checked : el.value);
+  try { await call('/api/admin/config', 'PUT', body); renderSettings(true); toast('Settings saved.'); } catch {}
+};
+
+// ---------- teams
+$('#newTeam').onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    await call('/api/admin/teams', 'POST', { name: $('#ntName').value, members: [$('#ntM1').value, $('#ntM2').value], password: $('#ntPw').value });
+    e.target.reset(); toast('Team created.');
+  } catch {}
+};
+function renderTeams() {
+  const box = $('#teamsList');
+  if (box.contains(document.activeElement)) return;
+  const open = new Set([...box.querySelectorAll('details[open]')].map((d) => d.dataset.id));
+  box.innerHTML = S.teams.map((t) => `
+    <details class="round" data-id="${t.id}" ${open.has(t.id) ? 'open' : ''}>
+      <summary><span>${esc(t.name)}</span><small class="muted">${esc((t.members || []).join(' & '))} · cash ${fmt(t.cash)} · ${fmt1(t.powerPoints)} power pts</small></summary>
+      <div class="stack">
+        <div class="fields">
+          <div><label>Team name</label><input data-k="name" value="${esc(t.name)}"></div>
+          <div><label>Members (comma separated)</label><input data-k="members" value="${esc((t.members || []).join(', '))}"></div>
+          <div><label>Cash</label><input type="number" data-k="cash" value="${t.cash}"></div>
+          <div><label>Power points</label><input type="number" step="any" data-k="powerPoints" value="${t.powerPoints}"></div>
+          ${S.resources.map((x) => `<div><label>${esc(x.name)} held</label><input type="number" data-inv="${x.id}" value="${t.inventory?.[x.id] || 0}"></div>`).join('')}
+          <div><label>New password (optional)</label><input data-k="password" placeholder="Leave blank to keep"></div>
+        </div>
+        <div class="row"><button class="primary" data-save>Save team</button><button class="danger" data-del>Delete team</button></div>
+      </div>
+    </details>`).join('') || '<p class="muted">No teams yet. Teams can register themselves, or you can create them above.</p>';
+  box.querySelectorAll('details').forEach((d) => {
+    const id = d.dataset.id;
+    d.querySelector('[data-save]').onclick = async () => {
+      const body = { inventory: {} };
+      d.querySelectorAll('[data-k]').forEach((el) => { if (el.value !== '') body[el.dataset.k] = el.dataset.k === 'members' ? el.value.split(',').map((s) => s.trim()) : el.value; });
+      d.querySelectorAll('[data-inv]').forEach((el) => body.inventory[el.dataset.inv] = el.value);
+      try { await call('/api/admin/teams/' + id, 'PUT', body); toast('Team saved.'); } catch {}
+    };
+    d.querySelector('[data-del]').onclick = async () => { if (confirm('Delete this team?')) { try { await call('/api/admin/teams/' + id, 'DELETE'); } catch {} } };
+  });
+}
+
+// ---------- raw
+function loadRaw() { $('#rawText').value = JSON.stringify({ config: S.config, resources: S.resources, rounds: S.rounds }, null, 2); }
+$('#rawLoad').onclick = loadRaw;
+$('#rawSave').onclick = async () => {
+  let data;
+  try { data = JSON.parse($('#rawText').value); } catch (e) { return toast('That JSON has an error: ' + e.message, true); }
+  try {
+    if (data.config) await call('/api/admin/config', 'PUT', data.config);
+    if (data.resources) await call('/api/admin/resources', 'PUT', { resources: data.resources });
+    if (data.rounds) await call('/api/admin/rounds', 'PUT', { rounds: data.rounds });
+    roundsDirty = resDirty = false; setState(S); loadRaw(); toast('Everything saved.');
+  } catch {}
+};
+
+boot();
+</script>
+</body>
+</html>
