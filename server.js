@@ -298,6 +298,7 @@ function resetGame() {
 
 // timer loop: fire scheduled flash news and lock rounds on time
 setInterval(() => {
+  if (!db) return;
   const g = G();
   if (g.status !== 'running') return;
   const r = curRound();
